@@ -1,0 +1,171 @@
+:root {
+    --azul: #000059;
+    --blanco: #ffffff;
+    --celeste: #329AD6;
+    --gris: #F4F6FA;
+    --borde: #E5E9F1;
+}
+
+/* Estructura principal */
+html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+    background: var(--blanco);
+}
+[data-testid="stMainBlockContainer"] {
+    max-width: 1420px;
+    margin: 0 auto;
+    padding: 1.5rem 2.1rem 5rem;
+    min-height: auto;
+    background: var(--blanco);
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    overflow: visible;
+}
+[data-testid="stSidebar"] {
+    background: var(--azul);
+    border-right: none;
+}
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h2,
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3,
+[data-testid="stSidebar"] [data-testid="stWidgetLabel"] p {
+    color: var(--blanco);
+}
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {
+    color: #D2D8F0;
+}
+
+/* Título */
+.hero {
+    background: var(--azul);
+    color: var(--blanco);
+    padding: 24px 28px;
+    margin: 0 0 28px;
+    border-radius: 10px;
+}
+.hero__tag {
+    display: block;
+    color: #9BD5F3;
+    font-size: .75rem;
+    font-weight: 700;
+    letter-spacing: .7px;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+}
+.hero h1 {
+    color: var(--blanco);
+    font-size: clamp(1.65rem, 2.4vw, 2.15rem);
+    font-weight: 700;
+    letter-spacing: -.4px;
+    line-height: 1.2;
+    margin: 0 0 8px;
+}
+.hero p {
+    color: #E1E6F5;
+    font-size: .94rem;
+    margin: 0;
+}
+.section-title {
+    color: var(--azul);
+    font-size: 1.3rem;
+    font-weight: 700;
+    margin: 10px 0 16px;
+}
+
+/* Datos y controles */
+[data-testid="stMetric"] {
+    padding: 16px 18px;
+    border: 1px solid var(--borde);
+    border-radius: 10px;
+    box-shadow: none;
+    background: var(--blanco);
+    min-height: 115px;
+}
+[data-testid="stMetricLabel"] p {
+    color: var(--azul);
+    font-weight: 600;
+}
+[data-testid="stMetricValue"] {
+    color: var(--azul);
+}
+.small-note {
+    color: var(--azul);
+    line-height: 1.55;
+    font-size: .87rem;
+    background: var(--gris);
+    padding: 13px 16px;
+    margin: 14px 0 22px;
+    border: none;
+    border-radius: 8px;
+}
+[data-testid="stFormSubmitButton"] button,
+[data-testid="stButton"] button[kind="primary"] {
+    background: var(--celeste);
+    color: var(--azul);
+    border: 1px solid var(--celeste);
+    font-weight: 700;
+    border-radius: 8px;
+}
+[data-testid="stDownloadButton"] button {
+    border-radius: 8px;
+}
+
+/* Pestañas, tablas y gráficos */
+.stTabs [data-baseweb="tab-list"] {
+    border-bottom: 1px solid var(--borde);
+    gap: 3px;
+}
+.stTabs [data-baseweb="tab"] {
+    color: var(--azul);
+    border-radius: 0;
+    padding: 10px 15px;
+    font-weight: 600;
+}
+.stTabs [aria-selected="true"] {
+    background: var(--blanco);
+    color: var(--azul);
+    border-bottom: 2px solid var(--celeste);
+}
+[data-testid="stExpander"] {
+    border: 1px solid var(--borde);
+    border-radius: 8px;
+    background: var(--blanco);
+    overflow: visible;
+    margin: 12px 0 22px;
+}
+[data-testid="stImage"] {
+    max-width: 690px;
+    margin-left: auto;
+    margin-right: auto;
+}
+[data-testid="stImage"] img {
+    height: auto;
+    max-width: 100%;
+    object-fit: contain;
+}
+.empty-state {
+    background: var(--gris);
+    border-radius: 10px;
+    color: var(--azul);
+    padding: 48px 20px;
+    margin-top: 12px;
+    text-align: center;
+}
+.empty-state strong { font-size: 1.1rem; }
+.empty-state p { font-size: .9rem; margin: 8px 0 0; }
+.footer-note {
+    color: #59617A;
+    font-size: .8rem;
+    line-height: 1.5;
+    padding: 20px 0 30px;
+    margin-top: 20px;
+}
+
+@media (max-width: 900px) {
+    [data-testid="stMainBlockContainer"] {
+        padding: 1rem 1rem 4rem;
+    }
+    .hero { padding: 19px 18px; }
+    [data-testid="stImage"] { max-width: 100%; }
+}
