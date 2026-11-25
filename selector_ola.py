@@ -7,7 +7,7 @@ import streamlit.components.v1 as components
 
 import plotly.graph_objects as go
 
-from motor_algoritmos import cargar_datos, construir_grafo, leer_csv
+from motor_algoritmos import cargar_datos, construir_grafo, leer_csv, aplicar_bloqueos, expandir_cierres
 
 AZUL = "#000059"
 CELESTE = "#329AD6"
@@ -27,7 +27,24 @@ def niveles_ubicaciones():
 
 
 def lista_accesos():
-    return sorted(set(datos_selector()[3].values()))
+    posiciones, _, _, accesos = datos_selector()
+    return sorted(c for c in set(accesos.values()) if posiciones[c] != posiciones["NAV:CC-08"])
+
+
+def normalizar_cierres(cerrados):
+    posiciones, tipos, _, _ = datos_selector()
+    return sorted(expandir_cierres(posiciones, tipos, cerrados))
+
+
+def alternar_cierre(cerrados, codigo):
+    grupo = set(normalizar_cierres([codigo]))
+    actuales = set(normalizar_cierres(cerrados))
+    return sorted(actuales - grupo if grupo <= actuales else actuales | grupo)
+
+
+def cantidad_bloqueos(cerrados):
+    posiciones, _, _, _ = datos_selector()
+    return len({posiciones[c] for c in cerrados})
 
 
 def lista_ubicaciones(nivel=None):
@@ -55,7 +72,8 @@ def grupos_plano(tipo, nivel=None):
 def crear_selector(seleccionados=(), cerrados=(), nivel=None, tipo_activo="ubicacion"):
     posiciones, tipos, grafo, _ = datos_selector()
     orden = {c: i for i, c in enumerate(seleccionados, 1)}
-    cerrados = set(cerrados)
+    grafo, cerrados, puntos_cerrados, nodos_bloqueados = aplicar_bloqueos(
+        posiciones, tipos, grafo, cerrados)
     figura = go.Figure()
     xs, ys = [], []
     for a, vecinos in grafo.items():
@@ -66,7 +84,7 @@ def crear_selector(seleccionados=(), cerrados=(), nivel=None, tipo_activo="ubica
     figura.add_trace(go.Scatter(x=xs, y=ys, mode="lines",
         line=dict(color="#DEE7F1", width=1), hoverinfo="skip", showlegend=False))
 
-    apoyos = [n for n in posiciones if tipos[n] == "apoyo" and n != "NAV:CC-08"]
+    apoyos = [n for n in posiciones if tipos[n] == "apoyo" and n != "NAV:CC-08" and n not in nodos_bloqueados]
     figura.add_trace(go.Scatter(x=[posiciones[n][0] for n in apoyos],
         y=[posiciones[n][1] for n in apoyos], mode="markers",
         marker=dict(size=8, color=CELESTE, symbol="diamond"), name="Navegación",
@@ -82,6 +100,15 @@ def crear_selector(seleccionados=(), cerrados=(), nivel=None, tipo_activo="ubica
     estados = {"disponible": [], "abierto": [], "elegido": [], "cerrado": []}
     for tipo in ("ubicacion", "acceso"):
         for (x, y), codigos in grupos_plano(tipo, nivel):
+            if tipo == "acceso":
+                if (x, y) == posiciones["NAV:CC-08"]:
+                    continue
+                marcado = (x, y) in puntos_cerrados
+                estado = "cerrado" if marcado else "abierto"
+                texto = "Bloqueo físico" if marcado else "Punto de acceso abierto"
+                hover = f"{texto}<br>X: {x:g} · Y: {y:g}<br>" + "<br>".join(codigos)
+                estados[estado].append(((x, y), [tipo, codigos[0]], "", hover))
+                continue
             for i, codigo in enumerate(codigos):
                 desplazamiento = (i - (len(codigos) - 1) / 2) * 28
                 marcado = codigo in (orden if tipo == "ubicacion" else cerrados)
@@ -102,7 +129,7 @@ def crear_selector(seleccionados=(), cerrados=(), nivel=None, tipo_activo="ubica
         "disponible": ("Ubicación disponible", CELESTE, 7, "circle", .6),
         "abierto": ("Acceso abierto", AZUL, 8, "circle", .6),
         "elegido": ("Ubicación seleccionada", VERDE, 15, "circle", 1.8),
-        "cerrado": ("Acceso cerrado", ROJO, 15, "x", 1.5),
+        "cerrado": ("Punto bloqueado", ROJO, 15, "x", 1.5),
     }
     # El tipo activo queda al frente para facilitar el clic cuando se solapan tipos.
     orden_trazas = (["abierto", "cerrado", "disponible", "elegido"] if tipo_activo == "ubicacion"

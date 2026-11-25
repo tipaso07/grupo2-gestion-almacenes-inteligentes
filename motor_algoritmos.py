@@ -92,6 +92,47 @@ def construir_grafo(ubicaciones, apoyos):
     return posiciones, tipos, adyacencia, acceso_ubicacion
 
 
+# %% 2.1. Bloqueos por posición física
+
+def expandir_cierres(posiciones, tipos, codigos):
+    """Un código de acceso bloquea todos los accesos de su coordenada X/Y."""
+    codigos = set(codigos)
+    if any(tipos.get(c) != "acceso" for c in codigos):
+        raise ValueError("La lista de cierres contiene accesos no válidos")
+    puntos = {posiciones[c] for c in codigos}
+    if posiciones["NAV:CC-08"] in puntos:
+        raise ValueError("No se puede bloquear la posición del depósito CC-08")
+    return {n for n, xy in posiciones.items() if tipos[n] == "acceso" and xy in puntos}
+
+
+def tramo_bloqueado(a, b, puntos):
+    """Comprueba si un tramo recto de desplazamiento toca un punto cerrado."""
+    x1, y1 = a
+    x2, y2 = b
+    if x1 == x2:
+        return any(x == x1 and min(y1, y2) <= y <= max(y1, y2) for x, y in puntos)
+    if y1 == y2:
+        return any(y == y1 and min(x1, x2) <= x <= max(x1, x2) for x, y in puntos)
+    # El modelo actual es ortogonal; esta comprobación cubre también una diagonal.
+    return any(min(x1, x2) <= x <= max(x1, x2) and min(y1, y2) <= y <= max(y1, y2)
+               and math.isclose((x-x1)*(y2-y1), (y-y1)*(x2-x1), abs_tol=1e-8)
+               for x, y in puntos)
+
+
+def aplicar_bloqueos(posiciones, tipos, grafo, codigos):
+    cerrados = expandir_cierres(posiciones, tipos, codigos)
+    puntos = {posiciones[c] for c in cerrados}
+    # También se bloquean apoyos de navegación en la misma coordenada.
+    nodos_bloqueados = {n for n, xy in posiciones.items()
+                       if tipos[n] in ("acceso", "apoyo") and xy in puntos}
+    # Un corredor puede contener una arista que cruza el punto sin tenerlo como extremo.
+    activo = {n: {v: peso for v, peso in vecinos.items()
+                  if v not in nodos_bloqueados and
+                  not (puntos and peso > 0 and tramo_bloqueado(posiciones[n], posiciones[v], puntos))}
+              for n, vecinos in grafo.items() if n not in nodos_bloqueados}
+    return activo, cerrados, puntos, nodos_bloqueados
+
+
 # %% 3. BFS y Bellman-Ford
 def bfs(adyacencia, inicio, devolver_visitados=False):
     visitados = {inicio}
@@ -197,9 +238,8 @@ def analizar(numero, puntos_manuales=None, accesos_cerrados=()):
     ubicaciones, apoyos = cargar_datos()
     posiciones, tipos, grafo_original, accesos = construir_grafo(ubicaciones, apoyos)
     deposito = "NAV:CC-08"
-    cerrados = set(accesos_cerrados)
-    if not cerrados <= set(accesos.values()):
-        raise ValueError("La lista de cierres contiene accesos no válidos")
+    grafo, cerrados, puntos_cerrados, nodos_bloqueados = aplicar_bloqueos(
+        posiciones, tipos, grafo_original, accesos_cerrados)
 
     if puntos_manuales is None:
         codigos, registros = ubicaciones_ola(numero, ubicaciones)
@@ -218,9 +258,6 @@ def analizar(numero, puntos_manuales=None, accesos_cerrados=()):
         raise ValueError("Ubicaciones con acceso cerrado: " + ", ".join(bloqueadas)
                          + ". Reabre sus accesos o modifica la ola.")
 
-    # Quitar nodos cerrados y todas sus aristas de ambos sentidos.
-    grafo = {n: {v: peso for v, peso in vecinos.items() if v not in cerrados}
-             for n, vecinos in grafo_original.items() if n not in cerrados}
     alcanzables = bfs(grafo, deposito, devolver_visitados=True)
     conectados = len(alcanzables)
     # Con cierres pueden quedar zonas aisladas. Solo exigimos que todos los
@@ -260,6 +297,8 @@ def analizar(numero, puntos_manuales=None, accesos_cerrados=()):
         "codigos_ubicaciones": codigos,
         "acceso_ubicacion": {c: accesos[c] for c in codigos},
         "cerrados": sorted(cerrados),
+        "puntos_cerrados": sorted(puntos_cerrados),
+        "nodos_bloqueados": sorted(nodos_bloqueados),
         "nodos_originales": len(grafo_original),
         "aristas_originales": sum(len(v) for v in grafo_original.values()) // 2,
         "paradas": paradas,

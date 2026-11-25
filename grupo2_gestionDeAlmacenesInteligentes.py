@@ -4,7 +4,7 @@ import streamlit as st
 from motor_algoritmos import analizar
 from graficos import crear_grafico, crear_csv, crear_csv_ubicaciones, crear_csv_cierres, comprimir, comparar_recorridos
 from pathlib import Path
-from selector_ola import mostrar_selector, lista_accesos, lista_ubicaciones, puntos_del_evento, datos_selector, niveles_ubicaciones
+from selector_ola import mostrar_selector, lista_accesos, lista_ubicaciones, puntos_del_evento, datos_selector, niveles_ubicaciones, alternar_cierre, normalizar_cierres, cantidad_bloqueos
 
 st.set_page_config(
     page_title="Gestión de Almacenes Inteligentes",
@@ -20,11 +20,13 @@ st.markdown(f"<style>{(BASE / 'estilos.css').read_text(encoding='utf-8')}</style
 # %% 2. Cálculo y archivos
 @st.cache_data(show_spinner=False, max_entries=3)
 def analizar_ola(numero, puntos_manuales=None, cerrados=()):
+    # Los cierres representan posiciones físicas completas.
     return analizar(numero, puntos_manuales=puntos_manuales, accesos_cerrados=cerrados)
 
 
 @st.cache_data(show_spinner=False, max_entries=3)
 def generar_archivos(numero, puntos_manuales=None, cerrados=()):
+    # Generar las figuras con los bloqueos físicos del análisis vigente.
     datos = analizar_ola(numero, puntos_manuales, cerrados)
     origen = "orden de selección" if datos["manual"] else "orden del CSV"
     return {
@@ -87,7 +89,9 @@ def actualizar(clave, valores):
 def alternar(tipo, codigo):
     clave = "ubicaciones_manuales" if tipo == "ubicacion" else "accesos_cerrados"
     valores = list(st.session_state[clave])
-    if codigo in valores:
+    if tipo == "acceso":
+        valores = alternar_cierre(valores, codigo)
+    elif codigo in valores:
         valores.remove(codigo)
     else:
         valores.append(codigo)
@@ -97,6 +101,18 @@ def alternar(tipo, codigo):
 es_manual = modo == "Ola manual"
 seleccionados = st.session_state["ubicaciones_manuales"]
 cerrados = st.session_state["accesos_cerrados"]
+# Migrar selecciones guardadas de la versión anterior (cierres individuales).
+if cerrados:
+    try:
+        normalizados = normalizar_cierres([c for c in cerrados if c in lista_accesos()])
+        if normalizados != sorted(cerrados):
+            st.session_state["accesos_cerrados"] = cerrados = normalizados
+            invalidar_resultados()
+            st.info("Se actualizaron los cierres guardados a bloqueos físicos. El depósito permanece abierto.")
+    except (FileNotFoundError, KeyError, ValueError) as error:
+        st.error(f"No se pudieron cargar los bloqueos: {error}")
+        st.stop()
+numero_bloqueos = cantidad_bloqueos(cerrados) if cerrados else 0
 if es_manual or configurar_cierres:
     st.subheader("Crear ola manual" if es_manual else "Configurar accesos del almacén")
     herramientas = ["Seleccionar ubicaciones", "Cerrar / reabrir accesos"] if es_manual else ["Cerrar / reabrir accesos"]
@@ -107,15 +123,16 @@ if es_manual or configurar_cierres:
         nivel = st.radio("Nivel de almacenamiento", [1, 2, 3, 4], horizontal=True,
                          help="Las ubicaciones de distintos niveles pueden compartir coordenadas X/Y.")
     st.caption("Haz clic para marcar y vuelve a hacer clic para desmarcar. "
-               "Verde = ubicación elegida; rojo = acceso cerrado. "
+               "Verde = ubicación elegida; X roja = posición físicamente bloqueada. "
                "El número verde indica el orden de selección. El depósito permanece abierto. "
-               "Los códigos superpuestos se separan visualmente; sus coordenadas reales no cambian.")
+               "Cada cierre afecta todos los accesos y apoyos de la misma posición. "
+               "Las ubicaciones superpuestas se separan solo visualmente.")
     try:
         if es_manual:
             en_nivel = sum(niveles_ubicaciones().get(c) == nivel for c in seleccionados)
             st.write(f"**Seleccionadas en el nivel {nivel}:** {en_nivel} · "
                      f"**En otros niveles:** {len(seleccionados) - en_nivel} · "
-                     f"**Accesos cerrados:** {len(cerrados)}")
+                     f"**Puntos bloqueados:** {numero_bloqueos}")
 
         evento = mostrar_selector(seleccionados if es_manual else (), cerrados,
                                  nivel, tipo_activo, st.session_state["ultimo_evento_plano"])
@@ -142,7 +159,7 @@ if es_manual or configurar_cierres:
         st.error(f"No se pudo cargar el plano: {error}")
         st.stop()
 
-    st.write(f"**Accesos cerrados:** {len(cerrados)}")
+    st.write(f"**Puntos bloqueados:** {numero_bloqueos} · **Códigos de acceso cerrados:** {len(cerrados)}")
     if cerrados:
         st.write(", ".join(cerrados))
         if st.button("Reabrir todos los accesos", key="reabrir_todos"):
@@ -183,7 +200,7 @@ else:
 
 cerrados_analisis = tuple(sorted(cerrados))
 if not es_manual and cerrados:
-    st.caption(f"Este análisis considera {len(cerrados)} accesos cerrados. Activa Configurar accesos cerrados para modificarlos.")
+    st.caption(f"Este análisis considera {numero_bloqueos} puntos físicamente bloqueados. Activa Configurar accesos cerrados para modificarlos.")
 
 try:
     with st.spinner(f"Analizando la ola {ola}..."):
@@ -218,7 +235,7 @@ else:
 
 st.markdown(f"""
 <div class="small-note">
-    <strong>Ola {ola}</strong> · {detalle} · BFS: {datos['conectados']} nodos alcanzables · {len(datos['cerrados'])} accesos cerrados.<br>
+    <strong>Ola {ola}</strong> · {detalle} · BFS: {datos['conectados']} nodos alcanzables · {len(datos['puntos_cerrados'])} puntos bloqueados.<br>
     {nota} Las distancias están expresadas en unidades del plano.
 </div>
 """, unsafe_allow_html=True)
@@ -257,7 +274,7 @@ except ValueError as error:
     st.stop()
 
 with st.expander("Comparación del recorrido y orden de recogida"):
-    st.success("Distancias verificadas sumando las aristas recorridas. Ninguna ruta usa un nodo cerrado.")
+    st.success("Distancias verificadas sumando las aristas recorridas. Ninguna ruta usa un nodo bloqueado ni atraviesa una coordenada cerrada.")
     st.table(resumen_recorridos)
     st.caption("Los tránsitos cuentan cada arista de peso positivo, incluso si se repite. "
                "Los tramos visibles agrupan las aristas con las mismas coordenadas.")
@@ -277,8 +294,7 @@ for pestana, nombre in [(tab1, grafo), (tab2, referencia), (tab3, propuesta)]:
         st.image(archivos[nombre], use_container_width=True)
         if nombre != grafo:
             st.caption("Líneas más gruesas = más tránsitos. Flechas = sentido. "
-                       "Números = orden de recogida por acceso. Un círculo rojo indica cierre parcial; "
-                       "una X roja, cierre total de los accesos de esa coordenada.")
+                       "Números = orden de recogida por acceso. X roja = bloqueo físico completo de la posición.")
         st.download_button("Descargar imagen PNG", archivos[nombre], file_name=nombre,
                            mime="image/png", key=nombre)
 

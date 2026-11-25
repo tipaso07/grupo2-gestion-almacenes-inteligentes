@@ -8,6 +8,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from motor_algoritmos import tramo_bloqueado
 
 AZUL = "#000059"
 BLANCO = "#ffffff"
@@ -24,7 +25,8 @@ def verificar_recorrido(datos, tipo):
         raise ValueError("Tipo de recorrido no válido")
     ruta = datos[f"ruta_{tipo}"]
     grafo = datos["grafo"]
-    cerrados = set(datos.get("cerrados", ()))
+    cerrados = set(datos.get("nodos_bloqueados", datos.get("cerrados", ())))
+    puntos_cerrados = set(datos.get("puntos_cerrados", ()))
     orden = datos[f"orden_{tipo}"]
     if not ruta or ruta[0] != "NAV:CC-08" or ruta[-1] != "NAV:CC-08":
         raise ValueError(f"La ruta de {tipo} no empieza y termina en el depósito")
@@ -41,6 +43,8 @@ def verificar_recorrido(datos, tipo):
         if b not in grafo[a]:
             raise ValueError(f"Arista no válida en la ruta de {tipo}: {a} → {b}")
         peso = grafo[a][b]
+        if peso > 0 and tramo_bloqueado(posiciones[a], posiciones[b], puntos_cerrados):
+            raise ValueError(f"La ruta de {tipo} atraviesa un punto físicamente bloqueado")
         distancia += peso
         if peso > 0:
             pasos += 1
@@ -140,7 +144,7 @@ def crear_grafico(datos, titulo, ruta=None, tipo=None):
     else:
         info = None
     fig, ax = plt.subplots(figsize=(8, 12))
-    cerrados = set(datos.get("cerrados", ()))
+    cerrados = set(datos.get("nodos_bloqueados", datos.get("cerrados", ())))
     for a, vecinos in grafo.items():
         for b, peso in vecinos.items():
             if a < b and peso > 0:
@@ -159,23 +163,11 @@ def crear_grafico(datos, titulo, ruta=None, tipo=None):
                    color=VERDE, label="Ubicaciones de la ola", zorder=8)
     if info is not None:
         _dibujar_recorrido(ax, datos, tipo, info)
-    # En coordenadas compartidas, no representar un cierre parcial como cierre total.
-    accesos_xy = defaultdict(list)
-    for n, xy in posiciones.items():
-        if tipos[n] == "acceso":
-            accesos_xy[xy].append(n)
-    parcial, total = [], []
-    for xy, nodos in accesos_xy.items():
-        cantidad = sum(n in cerrados for n in nodos)
-        if cantidad:
-            (total if cantidad == len(nodos) else parcial).append(xy)
-    if total:
-        ax.scatter([p[0] for p in total], [p[1] for p in total], s=48,
-                   color=ROJO, marker="x", linewidths=1.6, label="Acceso cerrado (total)", zorder=11)
-    if parcial:
-        ax.scatter([p[0] for p in parcial], [p[1] for p in parcial], s=72,
-                   facecolors="none", edgecolors=ROJO, marker="o", linewidths=1.5,
-                   label="Cierre parcial (accesos superpuestos)", zorder=11)
+    # Una única X por posición física, incluyendo accesos y apoyos superpuestos.
+    puntos_cerrados = datos.get("puntos_cerrados", ())
+    if puntos_cerrados:
+        ax.scatter([p[0] for p in puntos_cerrados], [p[1] for p in puntos_cerrados], s=65,
+                   color=ROJO, marker="x", linewidths=2, label="Punto físicamente bloqueado", zorder=11)
     x, y = posiciones["NAV:CC-08"]
     ax.scatter([x], [y], s=85, c=CELESTE, edgecolors=AZUL, label="Depósito CC-08", zorder=12)
     if info is not None:
@@ -237,8 +229,9 @@ def crear_csv_ubicaciones(datos):
 def crear_csv_cierres(datos):
     archivo = io.StringIO()
     writer = csv.writer(archivo)
-    writer.writerow(["acceso_cerrado"])
-    writer.writerows([c] for c in datos["cerrados"])
+    writer.writerow(["nodo_bloqueado", "tipo", "x", "y"])
+    for n in datos["nodos_bloqueados"]:
+        writer.writerow([n, datos["tipos"][n], *datos["posiciones"][n]])
     return archivo.getvalue().encode("utf-8-sig")
 
 
