@@ -193,14 +193,26 @@ def ruta_completa(orden, paradas, padres):
         ruta.extend(tramo if not ruta else tramo[1:])
     return ruta
 
-def analizar(numero):
+def analizar(numero, puntos_manuales=None):
     ubicaciones, apoyos = cargar_datos()
     posiciones, tipos, grafo, accesos = construir_grafo(ubicaciones, apoyos)
     conectados = bfs(grafo, "NAV:CC-08")
     if conectados != len(grafo):
         raise ValueError("El grafo no está conectado")
-    codigos, registros = ubicaciones_ola(numero, ubicaciones)
-    paradas = ["NAV:CC-08"] + list(dict.fromkeys(accesos[c] for c in codigos))
+    if puntos_manuales is None:
+        codigos, registros = ubicaciones_ola(numero, ubicaciones)
+        paradas = ["NAV:CC-08"] + list(dict.fromkeys(accesos[c] for c in codigos))
+        cantidad_ubicaciones = len(codigos)
+    else:
+        elegidos = list(dict.fromkeys(puntos_manuales))
+        if not elegidos:
+            raise ValueError("Selecciona al menos un punto de acceso")
+        validos = set(accesos.values())
+        if any(punto not in validos for punto in elegidos):
+            raise ValueError("La selección contiene puntos de acceso no válidos")
+        paradas = ["NAV:CC-08"] + elegidos
+        registros = 0
+        cantidad_ubicaciones = 0
 
     inicio = time.perf_counter()
     matriz, padres = calcular_matriz(grafo, paradas)
@@ -223,7 +235,11 @@ def analizar(numero):
     propuesta = distancia_ruta(elegida, matriz)
     return {
         "numero": numero, "posiciones": posiciones, "tipos": tipos, "grafo": grafo,
-        "conectados": conectados, "registros": registros, "ubicaciones": len(codigos),
+        "conectados": conectados, "registros": registros, "ubicaciones": cantidad_ubicaciones,
+        "manual": puntos_manuales is not None,
+        "paradas": paradas,
+        "orden_referencia": [paradas[i] for i in referencia],
+        "orden_propuesta": [paradas[i] for i in elegida],
         "accesos": len(paradas)-1, "referencia": original, "propuesta": propuesta,
         "heuristica": distancia_ruta(heuristica, matriz), "metodo": metodo,
         "tiempo_bf": tiempo_bf, "tiempo_h": tiempo_h, "tiempo_dp": tiempo_dp,

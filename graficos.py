@@ -49,7 +49,8 @@ def crear_csv(datos):
     archivo = io.StringIO()
     writer = csv.writer(archivo)
     writer.writerow(["ola", "metodo", "distancia_u", "tiempo_segundos"])
-    writer.writerow([datos["numero"], "Orden de filas CSV", datos["referencia"], ""])
+    origen = "Orden de selección manual" if datos.get("manual") else "Orden de filas CSV"
+    writer.writerow([datos["numero"], origen, datos["referencia"], ""])
     writer.writerow([datos["numero"], "Vecino cercano + 2-opt", datos["heuristica"], datos["tiempo_h"]])
     if datos["tiempo_dp"] is not None:
         writer.writerow([datos["numero"], "Programación dinámica", datos["propuesta"], datos["tiempo_dp"]])
