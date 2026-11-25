@@ -2,7 +2,7 @@
 import streamlit as st
 
 from motor_algoritmos import analizar
-from graficos import crear_grafico, crear_csv, crear_csv_ubicaciones, crear_csv_cierres, comprimir
+from graficos import crear_grafico, crear_csv, crear_csv_ubicaciones, crear_csv_cierres, comprimir, comparar_recorridos
 from pathlib import Path
 from selector_ola import mostrar_selector, lista_accesos, lista_ubicaciones, puntos_del_evento, datos_selector, niveles_ubicaciones
 
@@ -30,9 +30,9 @@ def generar_archivos(numero, puntos_manuales=None, cerrados=()):
     return {
         f"ola_{numero}_grafo.png": crear_grafico(datos, "Grafo del almacén"),
         f"ola_{numero}_ruta_referencia.png": crear_grafico(
-            datos, f"Ola {numero} - Referencia ({origen})", datos["ruta_referencia"]),
+            datos, f"Ola {numero} - Referencia ({origen})", datos["ruta_referencia"], tipo="referencia"),
         f"ola_{numero}_ruta_propuesta.png": crear_grafico(
-            datos, f"Ola {numero} - Ruta propuesta", datos["ruta_propuesta"]),
+            datos, f"Ola {numero} - Ruta propuesta", datos["ruta_propuesta"], tipo="propuesta"),
         f"ola_{numero}_comparacion.csv": crear_csv(datos),
         f"ola_{numero}_ubicaciones.csv": crear_csv_ubicaciones(datos),
         f"ola_{numero}_cierres.csv": crear_csv_cierres(datos),
@@ -248,8 +248,21 @@ with st.expander("Algoritmos y tiempos de ejecución", expanded=False):
 st.markdown('<div class="section-title">Grafo y recorridos</div>',
             unsafe_allow_html=True)
 
-with st.spinner("Preparando los gráficos..."):
-    archivos = generar_archivos(ola, puntos_manual, cerrados_analisis)
+try:
+    resumen_recorridos, orden_visitas = comparar_recorridos(datos)
+    with st.spinner("Preparando los gráficos..."):
+        archivos = generar_archivos(ola, puntos_manual, cerrados_analisis)
+except ValueError as error:
+    st.error(f"No se pudo verificar el recorrido: {error}")
+    st.stop()
+
+with st.expander("Comparación del recorrido y orden de recogida"):
+    st.success("Distancias verificadas sumando las aristas recorridas. Ninguna ruta usa un nodo cerrado.")
+    st.table(resumen_recorridos)
+    st.caption("Los tránsitos cuentan cada arista de peso positivo, incluso si se repite. "
+               "Los tramos visibles agrupan las aristas con las mismas coordenadas.")
+    st.dataframe(orden_visitas, hide_index=True, use_container_width=True)
+    st.caption("Cada fila indica el orden planificado de recogida por acceso, no todas las veces que se pasa por él.")
 
 grafo = f"ola_{ola}_grafo.png"
 referencia = f"ola_{ola}_ruta_referencia.png"
@@ -262,6 +275,10 @@ tab1, tab2, tab3, tab4 = st.tabs([
 for pestana, nombre in [(tab1, grafo), (tab2, referencia), (tab3, propuesta)]:
     with pestana:
         st.image(archivos[nombre], use_container_width=True)
+        if nombre != grafo:
+            st.caption("Líneas más gruesas = más tránsitos. Flechas = sentido. "
+                       "Números = orden de recogida por acceso. Un círculo rojo indica cierre parcial; "
+                       "una X roja, cierre total de los accesos de esa coordenada.")
         st.download_button("Descargar imagen PNG", archivos[nombre], file_name=nombre,
                            mime="image/png", key=nombre)
 
