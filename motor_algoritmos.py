@@ -93,7 +93,7 @@ def construir_grafo(ubicaciones, apoyos):
 
 
 # %% 3. BFS y Bellman-Ford
-def bfs(adyacencia, inicio):
+def bfs(adyacencia, inicio, devolver_visitados=False):
     visitados = {inicio}
     cola = deque([inicio])
     while cola:
@@ -102,7 +102,7 @@ def bfs(adyacencia, inicio):
             if vecino not in visitados:
                 visitados.add(vecino)
                 cola.append(vecino)
-    return len(visitados)
+    return visitados if devolver_visitados else len(visitados)
 
 def bellman_ford(adyacencia, inicio):
     distancias = {n: math.inf for n in adyacencia}
@@ -193,26 +193,46 @@ def ruta_completa(orden, paradas, padres):
         ruta.extend(tramo if not ruta else tramo[1:])
     return ruta
 
-def analizar(numero, puntos_manuales=None):
+def analizar(numero, puntos_manuales=None, accesos_cerrados=()):
     ubicaciones, apoyos = cargar_datos()
-    posiciones, tipos, grafo, accesos = construir_grafo(ubicaciones, apoyos)
-    conectados = bfs(grafo, "NAV:CC-08")
-    if conectados != len(grafo):
-        raise ValueError("El grafo no está conectado")
+    posiciones, tipos, grafo_original, accesos = construir_grafo(ubicaciones, apoyos)
+    deposito = "NAV:CC-08"
+    cerrados = set(accesos_cerrados)
+    if not cerrados <= set(accesos.values()):
+        raise ValueError("La lista de cierres contiene accesos no válidos")
+
     if puntos_manuales is None:
         codigos, registros = ubicaciones_ola(numero, ubicaciones)
-        paradas = ["NAV:CC-08"] + list(dict.fromkeys(accesos[c] for c in codigos))
-        cantidad_ubicaciones = len(codigos)
     else:
-        elegidos = list(dict.fromkeys(puntos_manuales))
-        if not elegidos:
-            raise ValueError("Selecciona al menos un punto de acceso")
-        validos = set(accesos.values())
-        if any(punto not in validos for punto in elegidos):
-            raise ValueError("La selección contiene puntos de acceso no válidos")
-        paradas = ["NAV:CC-08"] + elegidos
-        registros = 0
-        cantidad_ubicaciones = 0
+        codigos = list(dict.fromkeys(puntos_manuales))
+        if not codigos:
+            raise ValueError("Selecciona al menos una ubicación de almacenamiento")
+        if any(c not in ubicaciones for c in codigos):
+            raise ValueError("La selección contiene ubicaciones no válidas")
+        registros = len(codigos)
+
+    # La ola contiene ubicaciones, pero el recorrido visita sus accesos.
+    paradas = [deposito] + list(dict.fromkeys(accesos[c] for c in codigos))
+    bloqueadas = [c for c in codigos if accesos[c] in cerrados]
+    if bloqueadas:
+        raise ValueError("Ubicaciones con acceso cerrado: " + ", ".join(bloqueadas)
+                         + ". Reabre sus accesos o modifica la ola.")
+
+    # Quitar nodos cerrados y todas sus aristas de ambos sentidos.
+    grafo = {n: {v: peso for v, peso in vecinos.items() if v not in cerrados}
+             for n, vecinos in grafo_original.items() if n not in cerrados}
+    alcanzables = bfs(grafo, deposito, devolver_visitados=True)
+    conectados = len(alcanzables)
+    # Con cierres pueden quedar zonas aisladas. Solo exigimos que todos los
+    # destinos de la ola sean alcanzables desde el depósito.
+    if cerrados:
+        inaccesibles = [c for c in codigos if accesos[c] not in alcanzables]
+        if inaccesibles:
+            raise ValueError("No existe ruta hacia: " + ", ".join(inaccesibles)
+                             + ". Revisa los accesos cerrados.")
+    elif conectados != len(grafo):
+        raise ValueError("El grafo no está conectado")
+    cantidad_ubicaciones = len(codigos)
 
     inicio = time.perf_counter()
     matriz, padres = calcular_matriz(grafo, paradas)
@@ -237,6 +257,11 @@ def analizar(numero, puntos_manuales=None):
         "numero": numero, "posiciones": posiciones, "tipos": tipos, "grafo": grafo,
         "conectados": conectados, "registros": registros, "ubicaciones": cantidad_ubicaciones,
         "manual": puntos_manuales is not None,
+        "codigos_ubicaciones": codigos,
+        "acceso_ubicacion": {c: accesos[c] for c in codigos},
+        "cerrados": sorted(cerrados),
+        "nodos_originales": len(grafo_original),
+        "aristas_originales": sum(len(v) for v in grafo_original.values()) // 2,
         "paradas": paradas,
         "orden_referencia": [paradas[i] for i in referencia],
         "orden_propuesta": [paradas[i] for i in elegida],

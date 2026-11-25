@@ -2,9 +2,9 @@
 import streamlit as st
 
 from motor_algoritmos import analizar
-from graficos import crear_grafico, crear_csv, comprimir
+from graficos import crear_grafico, crear_csv, crear_csv_ubicaciones, crear_csv_cierres, comprimir
 from pathlib import Path
-from selector_ola import crear_selector, lista_accesos, puntos_del_evento
+from selector_ola import crear_selector, lista_accesos, lista_ubicaciones, puntos_del_evento, datos_selector
 
 st.set_page_config(
     page_title="Gestión de Almacenes Inteligentes",
@@ -19,13 +19,13 @@ st.markdown(f"<style>{(BASE / 'estilos.css').read_text(encoding='utf-8')}</style
 
 # %% 2. Cálculo y archivos
 @st.cache_data(show_spinner=False, max_entries=3)
-def analizar_ola(numero, puntos_manuales=None):
-    return analizar(numero, puntos_manuales=puntos_manuales)
+def analizar_ola(numero, puntos_manuales=None, cerrados=()):
+    return analizar(numero, puntos_manuales=puntos_manuales, accesos_cerrados=cerrados)
 
 
 @st.cache_data(show_spinner=False, max_entries=3)
-def generar_archivos(numero, puntos_manuales=None):
-    datos = analizar_ola(numero, puntos_manuales)
+def generar_archivos(numero, puntos_manuales=None, cerrados=()):
+    datos = analizar_ola(numero, puntos_manuales, cerrados)
     origen = "orden de selección" if datos["manual"] else "orden del CSV"
     return {
         f"ola_{numero}_grafo.png": crear_grafico(datos, "Grafo del almacén"),
@@ -34,6 +34,8 @@ def generar_archivos(numero, puntos_manuales=None):
         f"ola_{numero}_ruta_propuesta.png": crear_grafico(
             datos, f"Ola {numero} - Ruta propuesta", datos["ruta_propuesta"]),
         f"ola_{numero}_comparacion.csv": crear_csv(datos),
+        f"ola_{numero}_ubicaciones.csv": crear_csv_ubicaciones(datos),
+        f"ola_{numero}_cierres.csv": crear_csv_cierres(datos),
     }
 
 
@@ -46,10 +48,11 @@ with st.sidebar:
     modo = st.radio("Tipo de ola", ["Ola del dataset", "Ola manual"])
     if modo == "Ola del dataset":
         numero = st.number_input("Número de ola", min_value=1, value=39772, step=1)
+        configurar_cierres = st.checkbox("Configurar accesos cerrados")
         if st.button("Analizar ola", use_container_width=True, type="primary"):
             st.session_state["analisis_csv"] = int(numero)
     else:
-        st.caption("Selecciona accesos en el plano del almacén.")
+        st.caption("Selecciona las ubicaciones de almacenamiento en el plano.")
     st.divider()
     st.caption("Datos: de Assis (2024) · Mendeley Data")
 
@@ -62,86 +65,136 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# %% 4.1. Creación de una ola manual
-if "puntos_manuales" not in st.session_state:
-    st.session_state["puntos_manuales"] = []
-if "version_selector" not in st.session_state:
-    st.session_state["version_selector"] = 0
+# %% 4.1. Selección de ubicaciones y control de accesos
+# Los cierres son comunes a ambos modos durante la sesión actual.
+for clave, inicial in (("ubicaciones_manuales", []), ("accesos_cerrados", []),
+                       ("version_plano_v2", 0), ("grupo_pendiente", None)):
+    if clave not in st.session_state:
+        st.session_state[clave] = inicial
 
 
-def actualizar_seleccion(puntos):
-    st.session_state["puntos_manuales"] = puntos
-    st.session_state.pop("analisis_manual", None)
-    st.session_state["version_selector"] += 1
+def invalidar_resultados():
+    st.session_state.pop("analisis_manual_v2", None)
+    st.session_state.pop("analisis_csv", None)
+
+
+def actualizar(clave, valores):
+    st.session_state[clave] = valores
+    invalidar_resultados()
+    st.session_state["grupo_pendiente"] = None
+    st.session_state["version_plano_v2"] += 1
     st.rerun()
 
 
-if modo == "Ola manual":
-    st.subheader("Crear ola manual")
-    st.caption("Haz clic en los puntos azul oscuro para añadir paradas. "
-               "Los números indican el orden de selección. El depósito se incluye automáticamente.")
-    seleccionados = st.session_state["puntos_manuales"]
+def alternar(tipo, codigo):
+    clave = "ubicaciones_manuales" if tipo == "ubicacion" else "accesos_cerrados"
+    valores = list(st.session_state[clave])
+    if codigo in valores:
+        valores.remove(codigo)
+    else:
+        valores.append(codigo)
+    actualizar(clave, valores)
+
+
+es_manual = modo == "Ola manual"
+seleccionados = st.session_state["ubicaciones_manuales"]
+cerrados = st.session_state["accesos_cerrados"]
+if es_manual or configurar_cierres:
+    st.subheader("Crear ola manual" if es_manual else "Configurar accesos del almacén")
+    herramientas = ["Seleccionar ubicaciones", "Cerrar / reabrir accesos"] if es_manual else ["Cerrar / reabrir accesos"]
+    herramienta = st.radio("Acción en el plano", herramientas, horizontal=True)
+    tipo_activo = "ubicacion" if herramienta == "Seleccionar ubicaciones" else "acceso"
+    st.caption("Celeste: ubicación disponible · Verde: ubicación seleccionada · Azul: acceso abierto · Rojo: acceso con cierre. "
+               "Los puntos superpuestos permiten elegir su código exacto. El depósito permanece abierto.")
     try:
         evento = st.plotly_chart(
-            crear_selector(seleccionados),
-            key=f"selector_manual_{st.session_state['version_selector']}",
-            on_select="rerun", selection_mode="points",
-            theme=None, use_container_width=True,
-            config={"displaylogo": False, "scrollZoom": True}
+            crear_selector(seleccionados if es_manual else (), cerrados),
+            key=f"plano_v2_{tipo_activo}_{st.session_state['version_plano_v2']}",
+            on_select="rerun", selection_mode="points", theme=None,
+            use_container_width=True, config={"displaylogo": False, "scrollZoom": True}
         )
-        nuevos = [p for p in puntos_del_evento(evento) if p not in seleccionados]
-        if nuevos:
-            actualizar_seleccion(seleccionados + nuevos)
-        opciones = [p for p in lista_accesos() if p not in seleccionados]
+        evento_punto = puntos_del_evento(evento)
+        if evento_punto and evento_punto[0] == tipo_activo:
+            tipo_punto, codigos = evento_punto
+            if len(codigos) == 1:
+                alternar(tipo_punto, codigos[0])
+            else:
+                st.session_state["grupo_pendiente"] = (tipo_punto, tuple(codigos))
+                st.session_state["version_plano_v2"] += 1
+                st.rerun()
+        grupo = st.session_state["grupo_pendiente"]
+        if grupo and grupo[0] == tipo_activo:
+            st.info("Hay varios códigos en esta coordenada. Elige el que deseas marcar o desmarcar.")
+            valores = seleccionados if tipo_activo == "ubicacion" else cerrados
+            codigo = st.selectbox("Código en el punto pulsado", grupo[1],
+                format_func=lambda c: f"{c} — {'marcado' if c in valores else 'sin marcar'}",
+                key=f"grupo_{tipo_activo}_{st.session_state['version_plano_v2']}")
+            if st.button("Marcar / desmarcar código", key="aplicar_grupo"):
+                alternar(tipo_activo, codigo)
+
+        with st.expander("Seleccionar por código (opcional)"):
+            opciones = lista_ubicaciones() if tipo_activo == "ubicacion" else lista_accesos()
+            valores = seleccionados if tipo_activo == "ubicacion" else cerrados
+            codigo = st.selectbox("Código de ubicación" if tipo_activo == "ubicacion" else "Código de acceso",
+                opciones, index=None, placeholder="Busca un código", key=f"codigo_v2_{tipo_activo}",
+                format_func=lambda c: f"{c} {'✓' if c in valores else ''}")
+            if st.button("Marcar / desmarcar", disabled=codigo is None, key="aplicar_codigo"):
+                alternar(tipo_activo, codigo)
+        _, _, _, accesos = datos_selector()
     except (FileNotFoundError, KeyError, ValueError) as error:
         st.error(f"No se pudo cargar el plano: {error}")
         st.stop()
 
-    st.write(f"**Paradas seleccionadas:** {len(seleccionados)}")
-    if seleccionados:
-        st.write(" → ".join(seleccionados))
+    st.write(f"**Accesos cerrados:** {len(cerrados)}")
+    if cerrados:
+        st.write(", ".join(cerrados))
+        if st.button("Reabrir todos los accesos", key="reabrir_todos"):
+            actualizar("accesos_cerrados", [])
+    if es_manual:
+        st.write(f"**Ubicaciones seleccionadas:** {len(seleccionados)} · "
+                 f"**Paradas distintas:** {len({accesos[c] for c in seleccionados})}")
+        if seleccionados:
+            st.table([{"Orden": i, "Ubicación": c, "Acceso": accesos[c],
+                       "Estado": "Cerrado" if accesos[c] in cerrados else "Abierto"}
+                      for i, c in enumerate(seleccionados, 1)])
+        bloqueadas = [c for c in seleccionados if accesos[c] in cerrados]
+        if bloqueadas:
+            st.warning("Reabre los accesos de estas ubicaciones o retíralas de la ola: " + ", ".join(bloqueadas))
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            if st.button("Deshacer última ubicación", disabled=not seleccionados, use_container_width=True):
+                actualizar("ubicaciones_manuales", seleccionados[:-1])
+        with c2:
+            if st.button("Limpiar ubicaciones", disabled=not seleccionados, use_container_width=True):
+                actualizar("ubicaciones_manuales", [])
+        with c3:
+            if st.button("Analizar ola manual", disabled=not seleccionados or bool(bloqueadas),
+                         type="primary", use_container_width=True):
+                st.session_state["analisis_manual_v2"] = tuple(seleccionados)
 
-    with st.expander("Seleccionar por código (opcional)"):
-        codigo = st.selectbox("Punto de acceso", opciones, index=None,
-                             placeholder="Busca un código de acceso")
-        if st.button("Añadir acceso", disabled=codigo is None):
-            actualizar_seleccion(seleccionados + [codigo])
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        if st.button("Deshacer último", disabled=not seleccionados,
-                     use_container_width=True):
-            actualizar_seleccion(seleccionados[:-1])
-    with c2:
-        if st.button("Limpiar selección", disabled=not seleccionados,
-                     use_container_width=True):
-            actualizar_seleccion([])
-    with c3:
-        if st.button("Analizar ola manual", disabled=not seleccionados,
-                     type="primary", use_container_width=True):
-            st.session_state["analisis_manual"] = tuple(seleccionados)
-
-    if "analisis_manual" not in st.session_state:
+if es_manual:
+    if "analisis_manual_v2" not in st.session_state:
         st.stop()
     ola = "manual"
-    puntos_manual = st.session_state["analisis_manual"]
+    puntos_manual = st.session_state["analisis_manual_v2"]
 else:
     if "analisis_csv" not in st.session_state:
-        st.markdown("""
-        <div class="empty-state">
-            <strong>Utiliza el panel lateral para elegir una ola y analizar sus rutas.</strong>
-        </div>
-        """, unsafe_allow_html=True)
+        st.info("Selecciona una ola y presiona Analizar ola en el panel lateral.")
         st.stop()
     ola = st.session_state["analisis_csv"]
     puntos_manual = None
 
+cerrados_analisis = tuple(sorted(cerrados))
+if not es_manual and cerrados:
+    st.caption(f"Este análisis considera {len(cerrados)} accesos cerrados. Activa Configurar accesos cerrados para modificarlos.")
+
 try:
     with st.spinner(f"Analizando la ola {ola}..."):
-        datos = analizar_ola(ola, puntos_manual)
+        datos = analizar_ola(ola, puntos_manual, cerrados_analisis)
 except (FileNotFoundError, KeyError, ValueError) as error:
     st.error(f"No se pudo analizar la ola {ola}: {error}")
-    st.info("Comprueba que los tres CSV originales estén dentro de dataset/.")
+    if isinstance(error, (FileNotFoundError, KeyError)):
+        st.info("Comprueba que los tres CSV originales estén dentro de dataset/.")
     st.stop()
 
 
@@ -152,14 +205,14 @@ st.markdown('<div class="section-title">Resumen de la ola seleccionada</div>',
 aristas = sum(len(vecinos) for vecinos in datos["grafo"].values()) // 2
 reduccion = 100 * (datos["referencia"] - datos["propuesta"]) / datos["referencia"] if datos["referencia"] else 0
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("Nodos del grafo", f"{len(datos['grafo']):,}")
-m2.metric("Aristas", f"{aristas:,}")
+m1.metric("Nodos activos", f"{len(datos['grafo']):,}")
+m2.metric("Aristas activas", f"{aristas:,}")
 m3.metric("Distancia de referencia", f"{datos['referencia']:,.0f} u")
 m4.metric("Ruta propuesta", f"{datos['propuesta']:,.0f} u", f"-{reduccion:.2f}% vs. ref.", delta_color="inverse")
 
 if datos["manual"]:
-    detalle = f"{datos['accesos']} puntos de acceso seleccionados"
-    nota = "La referencia sigue el orden de selección manual; no representa un pedido real."
+    detalle = f"{datos['ubicaciones']} ubicaciones · {datos['accesos']} puntos de acceso"
+    nota = "La referencia sigue el orden de selección de ubicaciones, agrupadas por acceso."
     nombre_referencia = "Referencia (selección manual)"
 else:
     detalle = f"{datos['ubicaciones']} ubicaciones · {datos['accesos']} puntos de acceso"
@@ -168,7 +221,7 @@ else:
 
 st.markdown(f"""
 <div class="small-note">
-    <strong>Ola {ola}</strong> · {detalle} · BFS: {datos['conectados']} nodos alcanzables.<br>
+    <strong>Ola {ola}</strong> · {detalle} · BFS: {datos['conectados']} nodos alcanzables · {len(datos['cerrados'])} accesos cerrados.<br>
     {nota} Las distancias están expresadas en unidades del plano.
 </div>
 """, unsafe_allow_html=True)
@@ -199,7 +252,7 @@ st.markdown('<div class="section-title">Grafo y recorridos</div>',
             unsafe_allow_html=True)
 
 with st.spinner("Preparando los gráficos..."):
-    archivos = generar_archivos(ola, puntos_manual)
+    archivos = generar_archivos(ola, puntos_manual, cerrados_analisis)
 
 grafo = f"ola_{ola}_grafo.png"
 referencia = f"ola_{ola}_ruta_referencia.png"
@@ -216,7 +269,9 @@ for pestana, nombre in [(tab1, grafo), (tab2, referencia), (tab3, propuesta)]:
                            mime="image/png", key=nombre)
 
 with tab4:
-    st.write("Descarga los resultados de esta ola para incorporarlos al informe.")
+    st.write("Descarga los resultados de esta ola, las ubicaciones a recoger y los accesos cerrados.")
+    st.download_button("Descargar ubicaciones (CSV)", archivos[f"ola_{ola}_ubicaciones.csv"], file_name=f"ola_{ola}_ubicaciones.csv", mime="text/csv")
+    st.download_button("Descargar cierres (CSV)", archivos[f"ola_{ola}_cierres.csv"], file_name=f"ola_{ola}_cierres.csv", mime="text/csv")
     st.download_button("Descargar gráficos y CSV (ZIP)", comprimir(archivos),
                        file_name=f"grupo2_ola_{ola}_resultados.zip",
                        mime="application/zip", use_container_width=True)
