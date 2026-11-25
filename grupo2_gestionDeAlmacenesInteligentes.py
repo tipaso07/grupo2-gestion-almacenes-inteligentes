@@ -4,7 +4,7 @@ import streamlit as st
 from motor_algoritmos import analizar
 from graficos import crear_grafico, crear_csv, crear_csv_ubicaciones, crear_csv_cierres, comprimir
 from pathlib import Path
-from selector_ola import crear_selector, lista_accesos, lista_ubicaciones, puntos_del_evento, datos_selector
+from selector_ola import crear_selector, lista_accesos, lista_ubicaciones, puntos_del_evento, datos_selector, niveles_ubicaciones
 
 st.set_page_config(
     page_title="Gestión de Almacenes Inteligentes",
@@ -104,36 +104,66 @@ if es_manual or configurar_cierres:
     herramientas = ["Seleccionar ubicaciones", "Cerrar / reabrir accesos"] if es_manual else ["Cerrar / reabrir accesos"]
     herramienta = st.radio("Acción en el plano", herramientas, horizontal=True)
     tipo_activo = "ubicacion" if herramienta == "Seleccionar ubicaciones" else "acceso"
-    st.caption("Celeste: ubicación disponible · Verde: ubicación seleccionada · Azul: acceso abierto · Rojo: acceso con cierre. "
-               "Los puntos superpuestos permiten elegir su código exacto. El depósito permanece abierto.")
+    nivel = None
+    if es_manual:
+        nivel = st.radio("Nivel de almacenamiento", [1, 2, 3, 4], horizontal=True,
+                         help="Las ubicaciones de distintos niveles pueden compartir coordenadas X/Y.")
+    st.caption("Haz clic para marcar y vuelve a hacer clic para desmarcar. "
+               "Verde = ubicación elegida; rojo = acceso cerrado. "
+               "El número verde indica el orden de selección. El depósito permanece abierto.")
     try:
+        if es_manual:
+            en_nivel = sum(niveles_ubicaciones().get(c) == nivel for c in seleccionados)
+            st.write(f"**Seleccionadas en el nivel {nivel}:** {en_nivel} · "
+                     f"**En otros niveles:** {len(seleccionados) - en_nivel} · "
+                     f"**Accesos cerrados:** {len(cerrados)}")
+
+        # Resolver solapamientos ANTES del plano para que el control quede visible.
+        grupo = st.session_state["grupo_pendiente"]
+        if grupo and len(grupo) == 3 and grupo[0] == tipo_activo and grupo[2] == nivel:
+            valores = seleccionados if tipo_activo == "ubicacion" else cerrados
+            with st.container(border=True):
+                st.write("**Varios códigos en el mismo punto**")
+                codigo = st.selectbox("Elige el código exacto", grupo[1],
+                    format_func=lambda c: f"{c} — {'marcado' if c in valores else 'sin marcar'}",
+                    key=f"grupo_{tipo_activo}_{st.session_state['version_plano_v2']}")
+                c_a, c_b = st.columns(2)
+                with c_a:
+                    if st.button("Desmarcar" if codigo in valores else "Marcar", key="aplicar_grupo",
+                                 type="primary", use_container_width=True):
+                        alternar(tipo_activo, codigo)
+                with c_b:
+                    if st.button("Cancelar", key="cancelar_grupo", use_container_width=True):
+                        st.session_state["grupo_pendiente"] = None
+                        st.rerun()
+                if tipo_activo == "acceso":
+                    todos_cerrados = all(c in valores for c in grupo[1])
+                    if st.button("Reabrir todos los accesos de este punto" if todos_cerrados else
+                                 "Cerrar todos los accesos de este punto", use_container_width=True):
+                        nuevos = ([c for c in valores if c not in grupo[1]] if todos_cerrados else
+                                  list(dict.fromkeys([*valores, *grupo[1]])))
+                        actualizar("accesos_cerrados", nuevos)
+
         evento = st.plotly_chart(
-            crear_selector(seleccionados if es_manual else (), cerrados),
-            key=f"plano_v2_{tipo_activo}_{st.session_state['version_plano_v2']}",
+            crear_selector(seleccionados if es_manual else (), cerrados, nivel, tipo_activo),
+            key=f"plano_v3_{tipo_activo}_{nivel}_{st.session_state['version_plano_v2']}",
             on_select="rerun", selection_mode="points", theme=None,
             use_container_width=True, config={"displaylogo": False, "scrollZoom": True}
         )
-        evento_punto = puntos_del_evento(evento)
-        if evento_punto and evento_punto[0] == tipo_activo:
+        evento_punto = puntos_del_evento(evento, tipo_activo)
+        if evento_punto:
             tipo_punto, codigos = evento_punto
+            if tipo_punto == "ubicacion" and nivel is not None:
+                codigos = [c for c in codigos if niveles_ubicaciones().get(c) == nivel]
             if len(codigos) == 1:
                 alternar(tipo_punto, codigos[0])
-            else:
-                st.session_state["grupo_pendiente"] = (tipo_punto, tuple(codigos))
+            elif codigos:
+                st.session_state["grupo_pendiente"] = (tipo_punto, tuple(codigos), nivel)
                 st.session_state["version_plano_v2"] += 1
                 st.rerun()
-        grupo = st.session_state["grupo_pendiente"]
-        if grupo and grupo[0] == tipo_activo:
-            st.info("Hay varios códigos en esta coordenada. Elige el que deseas marcar o desmarcar.")
-            valores = seleccionados if tipo_activo == "ubicacion" else cerrados
-            codigo = st.selectbox("Código en el punto pulsado", grupo[1],
-                format_func=lambda c: f"{c} — {'marcado' if c in valores else 'sin marcar'}",
-                key=f"grupo_{tipo_activo}_{st.session_state['version_plano_v2']}")
-            if st.button("Marcar / desmarcar código", key="aplicar_grupo"):
-                alternar(tipo_activo, codigo)
 
         with st.expander("Seleccionar por código (opcional)"):
-            opciones = lista_ubicaciones() if tipo_activo == "ubicacion" else lista_accesos()
+            opciones = lista_ubicaciones(nivel) if tipo_activo == "ubicacion" else lista_accesos()
             valores = seleccionados if tipo_activo == "ubicacion" else cerrados
             codigo = st.selectbox("Código de ubicación" if tipo_activo == "ubicacion" else "Código de acceso",
                 opciones, index=None, placeholder="Busca un código", key=f"codigo_v2_{tipo_activo}",
