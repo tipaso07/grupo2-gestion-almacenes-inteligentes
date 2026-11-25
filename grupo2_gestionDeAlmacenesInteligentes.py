@@ -20,16 +20,17 @@ st.markdown(f"<style>{(BASE / 'estilos.css').read_text(encoding='utf-8')}</style
 # %% 2. Cálculo y archivos
 @st.cache_data(show_spinner=False, max_entries=3)
 def analizar_ola(numero, puntos_manuales=None, cerrados=()):
-    # Los cierres representan posiciones físicas completas.
-    return analizar(numero, puntos_manuales=puntos_manuales, accesos_cerrados=cerrados)
+    # Solo las olas manuales admiten bloqueos físicos.
+    return analizar(numero, puntos_manuales=puntos_manuales,
+                    accesos_cerrados=cerrados if puntos_manuales is not None else ())
 
 
 @st.cache_data(show_spinner=False, max_entries=3)
 def generar_archivos(numero, puntos_manuales=None, cerrados=()):
-    # Generar las figuras con los bloqueos físicos del análisis vigente.
+    # Generar las figuras con las restricciones del modo seleccionado.
     datos = analizar_ola(numero, puntos_manuales, cerrados)
     origen = "orden de selección" if datos["manual"] else "orden del CSV"
-    return {
+    archivos = {
         f"ola_{numero}_grafo.png": crear_grafico(datos, "Grafo del almacén"),
         f"ola_{numero}_ruta_referencia.png": crear_grafico(
             datos, f"Ola {numero} - Referencia ({origen})", datos["ruta_referencia"], tipo="referencia"),
@@ -37,8 +38,10 @@ def generar_archivos(numero, puntos_manuales=None, cerrados=()):
             datos, f"Ola {numero} - Ruta propuesta", datos["ruta_propuesta"], tipo="propuesta"),
         f"ola_{numero}_comparacion.csv": crear_csv(datos),
         f"ola_{numero}_ubicaciones.csv": crear_csv_ubicaciones(datos),
-        f"ola_{numero}_cierres.csv": crear_csv_cierres(datos),
     }
+    if datos["manual"]:
+        archivos[f"ola_{numero}_cierres.csv"] = crear_csv_cierres(datos)
+    return archivos
 
 
 # %% 3. Panel de selección
@@ -50,7 +53,6 @@ with st.sidebar:
     modo = st.radio("Tipo de ola", ["Ola del dataset", "Ola manual"])
     if modo == "Ola del dataset":
         numero = st.number_input("Número de ola", min_value=1, value=39772, step=1)
-        configurar_cierres = st.checkbox("Configurar accesos cerrados")
         if st.button("Analizar ola", use_container_width=True, type="primary"):
             st.session_state["analisis_csv"] = int(numero)
     else:
@@ -68,7 +70,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # %% 4.1. Selección de ubicaciones y control de accesos
-# Los cierres son comunes a ambos modos durante la sesión actual.
+# Las ubicaciones y los cierres manuales se conservan durante la sesión.
 for clave, inicial in (("ubicaciones_manuales", []), ("accesos_cerrados", []),
                        ("ultimo_evento_plano", None),):
     if clave not in st.session_state:
@@ -77,7 +79,6 @@ for clave, inicial in (("ubicaciones_manuales", []), ("accesos_cerrados", []),
 
 def invalidar_resultados():
     st.session_state.pop("analisis_manual_v2", None)
-    st.session_state.pop("analisis_csv", None)
 
 
 def actualizar(clave, valores):
@@ -100,7 +101,7 @@ def alternar(tipo, codigo):
 
 es_manual = modo == "Ola manual"
 seleccionados = st.session_state["ubicaciones_manuales"]
-cerrados = st.session_state["accesos_cerrados"]
+cerrados = st.session_state["accesos_cerrados"] if es_manual else []
 # Migrar selecciones guardadas de la versión anterior (cierres individuales).
 if cerrados:
     try:
@@ -113,9 +114,9 @@ if cerrados:
         st.error(f"No se pudieron cargar los bloqueos: {error}")
         st.stop()
 numero_bloqueos = cantidad_bloqueos(cerrados) if cerrados else 0
-if es_manual or configurar_cierres:
-    st.subheader("Crear ola manual" if es_manual else "Configurar accesos del almacén")
-    herramientas = ["Seleccionar ubicaciones", "Cerrar / reabrir accesos"] if es_manual else ["Cerrar / reabrir accesos"]
+if es_manual:
+    st.subheader("Crear ola manual")
+    herramientas = ["Seleccionar ubicaciones", "Cerrar / reabrir accesos"]
     herramienta = st.radio("Acción en el plano", herramientas, horizontal=True)
     tipo_activo = "ubicacion" if herramienta == "Seleccionar ubicaciones" else "acceso"
     nivel = None
@@ -198,9 +199,7 @@ else:
     ola = st.session_state["analisis_csv"]
     puntos_manual = None
 
-cerrados_analisis = tuple(sorted(cerrados))
-if not es_manual and cerrados:
-    st.caption(f"Este análisis considera {numero_bloqueos} puntos físicamente bloqueados. Activa Configurar accesos cerrados para modificarlos.")
+cerrados_analisis = tuple(sorted(cerrados)) if es_manual else ()
 
 try:
     with st.spinner(f"Analizando la ola {ola}..."):
@@ -233,9 +232,11 @@ else:
     nota = "La ruta de referencia se basa en el orden de las filas del CSV (no es un recorrido operativo verificado)."
     nombre_referencia = "Referencia (orden CSV)"
 
+detalle_bloqueos = f" · {len(datos['puntos_cerrados'])} puntos bloqueados" if es_manual else ""
+
 st.markdown(f"""
 <div class="small-note">
-    <strong>Ola {ola}</strong> · {detalle} · BFS: {datos['conectados']} nodos alcanzables · {len(datos['puntos_cerrados'])} puntos bloqueados.<br>
+    <strong>Ola {ola}</strong> · {detalle} · BFS: {datos['conectados']} nodos alcanzables{detalle_bloqueos}.<br>
     {nota} Las distancias están expresadas en unidades del plano.
 </div>
 """, unsafe_allow_html=True)
@@ -274,7 +275,10 @@ except ValueError as error:
     st.stop()
 
 with st.expander("Comparación del recorrido y orden de recogida"):
-    st.success("Distancias verificadas sumando las aristas recorridas. Ninguna ruta usa un nodo bloqueado ni atraviesa una coordenada cerrada.")
+    mensaje = "Distancias verificadas sumando las aristas recorridas."
+    if es_manual:
+        mensaje += " Ninguna ruta usa un nodo bloqueado ni atraviesa una coordenada cerrada."
+    st.success(mensaje)
     st.table(resumen_recorridos)
     st.caption("Los tránsitos cuentan cada arista de peso positivo, incluso si se repite. "
                "Los tramos visibles agrupan las aristas con las mismas coordenadas.")
@@ -293,15 +297,20 @@ for pestana, nombre in [(tab1, grafo), (tab2, referencia), (tab3, propuesta)]:
     with pestana:
         st.image(archivos[nombre], use_container_width=True)
         if nombre != grafo:
-            st.caption("Líneas más gruesas = más tránsitos. Flechas = sentido. "
-                       "Números = orden de recogida por acceso. X roja = bloqueo físico completo de la posición.")
+            leyenda = ("Líneas más gruesas = más tránsitos. Flechas = sentido. "
+                       "Números = orden de recogida por acceso.")
+            if es_manual:
+                leyenda += " X roja = bloqueo físico completo de la posición."
+            st.caption(leyenda)
         st.download_button("Descargar imagen PNG", archivos[nombre], file_name=nombre,
                            mime="image/png", key=nombre)
 
 with tab4:
-    st.write("Descarga los resultados de esta ola, las ubicaciones a recoger y los accesos cerrados.")
+    st.write("Descarga los resultados de esta ola, las ubicaciones a recoger"
+             + (" y los accesos cerrados." if es_manual else "."))
     st.download_button("Descargar ubicaciones (CSV)", archivos[f"ola_{ola}_ubicaciones.csv"], file_name=f"ola_{ola}_ubicaciones.csv", mime="text/csv")
-    st.download_button("Descargar cierres (CSV)", archivos[f"ola_{ola}_cierres.csv"], file_name=f"ola_{ola}_cierres.csv", mime="text/csv")
+    if es_manual:
+        st.download_button("Descargar cierres (CSV)", archivos[f"ola_{ola}_cierres.csv"], file_name=f"ola_{ola}_cierres.csv", mime="text/csv")
     st.download_button("Descargar gráficos y CSV (ZIP)", comprimir(archivos),
                        file_name=f"grupo2_ola_{ola}_resultados.zip",
                        mime="application/zip", use_container_width=True)
