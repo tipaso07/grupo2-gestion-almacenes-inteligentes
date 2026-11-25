@@ -1,6 +1,9 @@
 # %% 1. Datos del plano
 from collections import defaultdict
 from functools import lru_cache
+from pathlib import Path
+
+import streamlit.components.v1 as components
 
 import plotly.graph_objects as go
 
@@ -75,31 +78,35 @@ def crear_selector(seleccionados=(), cerrados=(), nivel=None, tipo_activo="ubica
         name="Depósito CC-08", hovertemplate="Depósito CC-08<extra></extra>",
         selected=dict(marker=dict(opacity=1)), unselected=dict(marker=dict(opacity=1))))
 
-    # Las marcas verdes y rojas dependen de la selección persistida en Python,
-    # no de la selección temporal de Plotly. Se dibujan al final, por encima del fondo.
+    # Separación exclusivamente visual: las coordenadas del grafo no cambian.
     estados = {"disponible": [], "abierto": [], "elegido": [], "cerrado": []}
     for tipo in ("ubicacion", "acceso"):
-        for xy, codigos in grupos_plano(tipo, nivel):
-            marcados = [c for c in codigos if c in (orden if tipo == "ubicacion" else cerrados)]
-            if tipo == "ubicacion":
-                estado = "elegido" if marcados else "disponible"
-                etiqueta = ",".join(str(orden[c]) for c in marcados)
-                hover = "<br>".join(c + (" · seleccionada" if c in orden else " · disponible") for c in codigos)
-            else:
-                estado = "cerrado" if marcados else "abierto"
-                etiqueta = "" if not marcados or len(marcados) == len(codigos) else f"{len(marcados)}/{len(codigos)}"
-                hover = "<br>".join(c + (" · cerrado" if c in cerrados else " · abierto") for c in codigos)
-            estados[estado].append((xy, [tipo, *codigos], etiqueta, hover))
+        for (x, y), codigos in grupos_plano(tipo, nivel):
+            for i, codigo in enumerate(codigos):
+                desplazamiento = (i - (len(codigos) - 1) / 2) * 28
+                marcado = codigo in (orden if tipo == "ubicacion" else cerrados)
+                if tipo == "ubicacion":
+                    estado = "elegido" if marcado else "disponible"
+                    etiqueta = str(orden[codigo]) if marcado else ""
+                    texto = "seleccionada" if marcado else "disponible"
+                else:
+                    estado = "cerrado" if marcado else "abierto"
+                    etiqueta = ""
+                    texto = "cerrado" if marcado else "abierto"
+                hover = f"{codigo} · {texto}<br>X: {x:g} · Y: {y:g}"
+                if desplazamiento:
+                    hover += "<br>Marcador separado solo para visualizar"
+                estados[estado].append(((x, y + desplazamiento), [tipo, codigo], etiqueta, hover))
 
     estilos = {
         "disponible": ("Ubicación disponible", CELESTE, 7, "circle", .6),
         "abierto": ("Acceso abierto", AZUL, 8, "circle", .6),
         "elegido": ("Ubicación seleccionada", VERDE, 15, "circle", 1.8),
-        "cerrado": ("Acceso cerrado (total o parcial)", ROJO, 15, "x", 1.5),
+        "cerrado": ("Acceso cerrado", ROJO, 15, "x", 1.5),
     }
     # El tipo activo queda al frente para facilitar el clic cuando se solapan tipos.
-    orden_trazas = (["abierto", "disponible", "cerrado", "elegido"] if tipo_activo == "ubicacion"
-                    else ["disponible", "abierto", "elegido", "cerrado"])
+    orden_trazas = (["abierto", "cerrado", "disponible", "elegido"] if tipo_activo == "ubicacion"
+                    else ["disponible", "elegido", "abierto", "cerrado"])
     for estado in orden_trazas:
         puntos = estados[estado]
         nombre, color, tam, simbolo, borde = estilos[estado]
@@ -114,7 +121,7 @@ def crear_selector(seleccionados=(), cerrados=(), nivel=None, tipo_activo="ubica
                         line=dict(color="#FFFFFF" if estado != "cerrado" else ROJO, width=borde)),
             selected=dict(marker=dict(opacity=1)), unselected=dict(marker=dict(opacity=1)),
         ))
-    figura.update_layout(height=930, clickmode="event+select", dragmode="pan",
+    figura.update_layout(height=930, clickmode="event", dragmode="pan", uirevision="almacen",
         hovermode="closest", margin=dict(l=50, r=20, t=15, b=90),
         paper_bgcolor="white", plot_bgcolor="white", font=dict(color=AZUL),
         legend=dict(orientation="h", y=-.10))
@@ -123,14 +130,24 @@ def crear_selector(seleccionados=(), cerrados=(), nivel=None, tipo_activo="ubica
     return figura
 
 
+# %% 3. Componente interactivo con clics individuales
+# Se mantiene una misma instancia para conservar el zoom entre selecciones.
+_plano = components.declare_component(
+    "plano_almacen", path=str(Path(__file__).resolve().parent / "plano_interactivo")
+)
+
+
+def mostrar_selector(seleccionados, cerrados, nivel, tipo_activo, ultimo_evento):
+    figura = crear_selector(seleccionados, cerrados, nivel, tipo_activo)
+    return _plano(figura=figura.to_json(), tipo=tipo_activo, nivel=nivel,
+                  ultimo_evento=ultimo_evento, key="plano_almacen_persistente", default=None)
+
+
 def puntos_del_evento(evento, tipo_activo=None):
-    validos = {"ubicacion": set(lista_ubicaciones()), "acceso": set(lista_accesos())}
-    for punto in evento.selection.points:
-        dato = punto.get("customdata")
-        if isinstance(dato, (list, tuple)) and len(dato) > 1 and dato[0] in validos:
-            if tipo_activo is not None and dato[0] != tipo_activo:
-                continue
-            codigos = [c for c in dato[1:] if c in validos[dato[0]]]
-            if codigos:
-                return dato[0], codigos
-    return None
+    if not isinstance(evento, dict):
+        return None
+    tipo, codigo = evento.get("tipo"), evento.get("codigo")
+    if tipo != tipo_activo:
+        return None
+    validos = lista_ubicaciones() if tipo == "ubicacion" else lista_accesos()
+    return (tipo, codigo) if codigo in validos else None

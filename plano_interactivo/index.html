@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="plotly.min.js"></script>
+<style>html,body{margin:0;padding:0;background:#fff;overflow:hidden}#plano{width:100%;height:930px}#estado{font:13px Arial;color:#000059;position:absolute;top:6px;right:8px;pointer-events:none;z-index:2}</style>
+</head>
+<body>
+<div id="plano"></div><div id="estado" role="status"></div>
+<script>
+const plano = document.getElementById('plano');
+const estado = document.getElementById('estado');
+let args = null, iniciado = false, pendiente = null, renderizando = false, siguiente = null;
+let secuencia = 0;
+const instancia = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+const comunicar = (type, extra={}) => window.parent.postMessage({isStreamlitMessage:true,type,...extra}, '*');
+const config = {displaylogo:false,scrollZoom:true,responsive:true};
+
+function clic(evento) {
+    if (!args || pendiente || renderizando) return;
+    const punto = evento.points.find(p => Array.isArray(p.customdata) && p.customdata[0] === args.tipo);
+    if (!punto) return;
+    pendiente = instancia + '-' + (++secuencia);
+    estado.textContent = 'Actualizando…';
+    comunicar('streamlit:setComponentValue', {dataType:'json',value:{
+        id:pendiente,tipo:punto.customdata[0],codigo:punto.customdata[1],nivel:args.nivel
+    }});
+}
+
+async function dibujar(nuevos) {
+    if (renderizando) { siguiente=nuevos; return; }
+    renderizando=true;
+    args=nuevos;
+    try {
+        const figura=JSON.parse(args.figura);
+        if (!iniciado) {
+            await Plotly.newPlot(plano,figura.data,figura.layout,config);
+            plano.on('plotly_click',clic);
+            iniciado=true;
+        } else {
+            // Una revisión constante preserva el zoom y el desplazamiento del usuario.
+            await Plotly.react(plano,figura.data,figura.layout,config);
+        }
+        if (pendiente && args.ultimo_evento === pendiente) {
+            pendiente=null;
+            estado.textContent='';
+        }
+        comunicar('streamlit:setFrameHeight',{height:930});
+    } catch (error) {
+        estado.textContent='No se pudo dibujar el plano: '+error.message;
+        pendiente=null;
+    } finally {
+        renderizando=false;
+        if (siguiente) {const proximo=siguiente;siguiente=null;dibujar(proximo);}
+    }
+}
+window.addEventListener('message',event=>{
+    if (event.source === window.parent && event.data && event.data.type === 'streamlit:render') {
+        dibujar(event.data.args);
+    }
+});
+comunicar('streamlit:componentReady',{apiVersion:1});
+comunicar('streamlit:setFrameHeight',{height:930});
+</script>
+</body>
+</html>
